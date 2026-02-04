@@ -4,7 +4,6 @@ import matplotlib.pyplot as plt
 from wordcloud import WordCloud
 from collections import Counter
 
-
 from src.text_clean import normalize_title
 from src.extract import aggregate_skills
 from src.report import make_pdf_report
@@ -14,6 +13,7 @@ DATA_PATH = "data/job_dataset.csv"
 st.set_page_config(page_title="Tech Skills Recommender", layout="wide")
 st.title("Tech Skills Recommender")
 st.caption("Type a job title and get the most recurring technical skills from the dataset.")
+
 
 @st.cache_data
 def load_data(path: str) -> pd.DataFrame:
@@ -29,35 +29,44 @@ def load_data(path: str) -> pd.DataFrame:
     df["Title"] = df["Title"].map(normalize_title)
     return df
 
+
 df = load_data(DATA_PATH)
 
-def skills_counter_for_query(df: pd.DataFrame, query: str) -> tuple[pd.DataFrame, int, Counter]:
+
+def skills_counter_for_query(df_: pd.DataFrame, query_: str) -> tuple[pd.DataFrame, int, Counter]:
     """
     Returns:
       - filtered_df
       - matched_count
       - Counter of skills (from Skills + Keywords)
     """
-    filtered = df[df["Title"].str.contains(query, case=False, na=False)]
-    matched = len(filtered)
-    rows = filtered[["Skills", "Keywords"]].to_dict(orient="records")
-    top = aggregate_skills(rows, top_n=10_000)  # big N to get full counter
+    filtered_ = df_[df_["Title"].str.contains(query_, case=False, na=False)]
+    matched_ = len(filtered_)
+    rows_ = filtered_[["Skills", "Keywords"]].to_dict(orient="records")
 
-    c = Counter()
-    for skill, count in top:
-        c[skill] = count
+    # Big N to build a full counter
+    top_ = aggregate_skills(rows_, top_n=10_000)
 
-    return filtered, matched, c
+    c_ = Counter()
+    for skill, count in top_:
+        c_[skill] = count
+
+    return filtered_, matched_, c_
 
 
 mode = st.radio("Mode", ["Single Role", "Compare Two Roles"], horizontal=True)
 
+# -------------------- SINGLE ROLE --------------------
 if mode == "Single Role":
     col1, col2 = st.columns([2, 1])
     with col1:
-        query = st.text_input("Enter a job title (e.g., .NET Developer, Data Analyst)", value=".NET Developer")
+        query = st.text_input(
+            "Enter a job title (e.g., .NET Developer, Data Analyst)",
+            value=".NET Developer",
+            key="single_query",
+        )
     with col2:
-        top_n = st.slider("Top N skills", 5, 30, 15)
+        top_n = st.slider("Top N skills", 5, 30, 15, key="single_top_n")
 
     filtered, matched, counter = skills_counter_for_query(df, query)
 
@@ -79,7 +88,8 @@ if mode == "Single Role":
             "Download CSV",
             data=csv_bytes,
             file_name=f"top_skills_{query.replace(' ', '_').lower()}.csv",
-            mime="text/csv"
+            mime="text/csv",
+            key="download_csv_single",
         )
 
         pdf_bytes = make_pdf_report(query, matched, top_df)
@@ -87,7 +97,8 @@ if mode == "Single Role":
             "Download PDF Report",
             data=pdf_bytes,
             file_name=f"skills_report_{query.replace(' ', '_').lower()}.pdf",
-            mime="application/pdf"
+            mime="application/pdf",
+            key="download_pdf_single",
         )
 
     with right:
@@ -100,8 +111,10 @@ if mode == "Single Role":
         st.pyplot(fig, clear_figure=True)
 
     st.subheader("Word cloud (optional)")
-    if st.toggle("Show word cloud"):
-        wc = WordCloud(width=900, height=450, background_color="white").generate(" ".join(top_df["Skill"].tolist()))
+    if st.toggle("Show word cloud", key="wc_single"):
+        wc = WordCloud(width=900, height=450, background_color="white").generate(
+            " ".join(top_df["Skill"].tolist())
+        )
         fig2, ax2 = plt.subplots()
         ax2.imshow(wc, interpolation="bilinear")
         ax2.axis("off")
@@ -111,15 +124,16 @@ if mode == "Single Role":
     st.subheader("Matched titles preview")
     st.write(sorted(filtered["Title"].unique())[:20])
 
+# -------------------- COMPARE TWO ROLES --------------------
 else:
     c1, c2, c3 = st.columns([2, 2, 1])
 
     with c1:
-        query_a = st.text_input("Role A (e.g., .NET Developer)", value=".NET Developer")
+        query_a = st.text_input("Role A (e.g., .NET Developer)", value=".NET Developer", key="compare_query_a")
     with c2:
-        query_b = st.text_input("Role B (e.g., Cloud Engineer)", value="Cloud Engineer")
+        query_b = st.text_input("Role B (e.g., Cloud Engineer)", value="Cloud Engineer", key="compare_query_b")
     with c3:
-        top_n = st.slider("Top N skills", 5, 30, 15)
+        top_n = st.slider("Top N skills", 5, 30, 15, key="compare_top_n")
 
     filtered_a, matched_a, counter_a = skills_counter_for_query(df, query_a)
     filtered_b, matched_b, counter_b = skills_counter_for_query(df, query_b)
@@ -130,7 +144,6 @@ else:
         st.warning("One of the roles has 0 matches. Try broader terms like 'Developer', 'Engineer', or 'Analyst'.")
         st.stop()
 
-    # Overlap and differences
     set_a = set(counter_a.keys())
     set_b = set(counter_b.keys())
 
@@ -140,17 +153,17 @@ else:
 
     common_df = pd.DataFrame(
         [(s, counter_a[s], counter_b[s]) for s in common],
-        columns=["Skill", f"{query_a} Mentions", f"{query_b} Mentions"]
+        columns=["Skill", f"{query_a} Mentions", f"{query_b} Mentions"],
     ).sort_values(by=[f"{query_a} Mentions", f"{query_b} Mentions"], ascending=False).head(top_n)
 
     only_a_df = pd.DataFrame(
         [(s, counter_a[s]) for s in only_a],
-        columns=["Skill", "Mentions"]
+        columns=["Skill", "Mentions"],
     ).sort_values(by="Mentions", ascending=False).head(top_n)
 
     only_b_df = pd.DataFrame(
         [(s, counter_b[s]) for s in only_b],
-        columns=["Skill", "Mentions"]
+        columns=["Skill", "Mentions"],
     ).sort_values(by="Mentions", ascending=False).head(top_n)
 
     st.subheader("Comparison Insights")
@@ -182,19 +195,14 @@ else:
         st.subheader(f"Skills unique to {query_b}")
         st.dataframe(only_b_df, use_container_width=True)
 
-    # Download comparison CSV
-    export_common = common_df.copy()
-    export_only_a = only_a_df.copy()
-    export_only_b = only_b_df.copy()
-
-    # Create a single multi-sheet-like CSV by adding section headers
+    # Download comparison CSV (with section headers)
     export_lines = []
     export_lines.append("=== Common Skills ===")
-    export_lines.append(export_common.to_csv(index=False))
+    export_lines.append(common_df.to_csv(index=False))
     export_lines.append("\n=== Unique Skills (Role A) ===")
-    export_lines.append(export_only_a.to_csv(index=False))
+    export_lines.append(only_a_df.to_csv(index=False))
     export_lines.append("\n=== Unique Skills (Role B) ===")
-    export_lines.append(export_only_b.to_csv(index=False))
+    export_lines.append(only_b_df.to_csv(index=False))
 
     comparison_csv = "\n".join(export_lines).encode("utf-8")
 
@@ -202,26 +210,11 @@ else:
         "Download Comparison CSV",
         data=comparison_csv,
         file_name=f"compare_{query_a.replace(' ', '_').lower()}_vs_{query_b.replace(' ', '_').lower()}.csv",
-        mime="text/csv"
+        mime="text/csv",
+        key="download_csv_compare",
     )
 
-with right:
-    st.subheader("Bar chart")
-    fig, ax = plt.subplots()
-    ax.bar(top_df["Skill"], top_df["Mentions"])
-    ax.set_ylabel("Mentions")
-    ax.set_xlabel("Skill")
-    ax.set_xticklabels(top_df["Skill"], rotation=60, ha="right")
-    st.pyplot(fig, clear_figure=True)
+    st.divider()
+    st.subheader("Matched titles preview")
+    st.write(sorted(set(filtered_a["Title"].unique()) | set(filtered_b["Title"].unique()))[:30])
 
-st.subheader("Word cloud (optional)")
-if st.toggle("Show word cloud"):
-    wc = WordCloud(width=900, height=450, background_color="white").generate(" ".join(top_df["Skill"].tolist()))
-    fig2, ax2 = plt.subplots()
-    ax2.imshow(wc, interpolation="bilinear")
-    ax2.axis("off")
-    st.pyplot(fig2, clear_figure=True)
-
-st.divider()
-st.subheader("Matched titles preview")
-st.write(sorted(filtered["Title"].unique())[:20])
