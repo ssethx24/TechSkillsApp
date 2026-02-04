@@ -1,20 +1,17 @@
-import re
-from io import BytesIO
-from collections import Counter
-
 import pandas as pd
 import streamlit as st
 import matplotlib.pyplot as plt
-
 from wordcloud import WordCloud
-from reportlab.lib.pagesizes import letter
-from reportlab.pdfgen import canvas
+
+from src.text_clean import normalize_title
+from src.extract import aggregate_skills
+from src.report import make_pdf_report
+
+DATA_PATH = "data/job_dataset.csv"
 
 st.set_page_config(page_title="Tech Skills Recommender", layout="wide")
 st.title("Tech Skills Recommender (using real dataset)")
 st.caption("Type a job title and get the most recurring technical skills from the dataset.")
-
-DATA_PATH = "data/job_dataset.csv"
 
 @st.cache_data
 def load_data(path: str) -> pd.DataFrame:
@@ -23,92 +20,33 @@ def load_data(path: str) -> pd.DataFrame:
     missing = required - set(df.columns)
     if missing:
         raise ValueError(f"Missing columns in dataset: {missing}")
+
     for c in ["Title", "Skills", "Keywords", "Responsibilities"]:
         df[c] = df[c].fillna("").astype(str)
+
+    df["Title"] = df["Title"].map(normalize_title)
     return df
 
-def normalize_title(s: str) -> str:
-    s = s.strip()
-    s = re.sub(r"\s+", " ", s)
-    return s
-
-def split_skills(text: str) -> list[str]:
-    """
-    Dataset uses semi-structured skills like:
-    'C#; .NET Core; SQL Server ...'
-    and keywords like:
-    '.NET; C#; ASP.NET MVC; ...'
-    We'll split on ; and , and clean tokens.
-    """
-    if not text:
-        return []
-    parts = re.split(r"[;,]\s*", text)
-    out = []
-    for p in parts:
-        p = p.strip()
-        p = re.sub(r"\s+", " ", p)
-        # remove tiny noise
-        if len(p) < 2:
-            continue
-        out.append(p)
-    return out
-
-def make_pdf_report(job_title: str, matched_count: int, top_df: pd.DataFrame) -> bytes:
-    buf = BytesIO()
-    c = canvas.Canvas(buf, pagesize=letter)
-    w, h = letter
-
-    c.setFont("Helvetica-Bold", 16)
-    c.drawString(50, h - 50, "Tech Skills Recommender Report")
-
-    c.setFont("Helvetica", 11)
-    c.drawString(50, h - 80, f"Job title query: {job_title}")
-    c.drawString(50, h - 100, f"Matched roles: {matched_count}")
-
-    c.setFont("Helvetica-Bold", 12)
-    c.drawString(50, h - 130, "Top recommended skills:")
-
-    c.setFont("Helvetica", 11)
-    y = h - 155
-    for _, row in top_df.iterrows():
-        c.drawString(60, y, f"- {row['Skill']} ({row['Mentions']})")
-        y -= 16
-        if y < 60:
-            c.showPage()
-            y = h - 60
-            c.setFont("Helvetica", 11)
-
-    c.save()
-    return buf.getvalue()
-
 df = load_data(DATA_PATH)
-df["Title"] = df["Title"].map(normalize_title)
 
-# ---- UI controls ----
 col1, col2 = st.columns([2, 1])
 with col1:
     query = st.text_input("Enter a job title (e.g., .NET Developer, Data Analyst)", value=".NET Developer")
 with col2:
     top_n = st.slider("Top N skills", 5, 30, 15)
 
-# title match (contains)
 filtered = df[df["Title"].str.contains(query, case=False, na=False)]
 matched = len(filtered)
 
 st.write(f"Matched **{matched}** rows for: **{query}**")
 
 if matched == 0:
-    st.warning("No matches. Tip: try a broader term (e.g., 'Developer', 'Engineer', 'Analyst').")
+    st.warning("No matches. Tip: try a broader term like 'Developer', 'Engineer', or 'Analyst'.")
     st.stop()
 
-# ---- skill aggregation ----
-counter = Counter()
-for _, row in filtered.iterrows():
-    # Structured sources (best)
-    counter.update(split_skills(row["Skills"]))
-    counter.update(split_skills(row["Keywords"]))
-
-top = counter.most_common(top_n)
+# Aggregate skills from filtered rows
+rows = filtered[["Skills", "Keywords"]].to_dict(orient="records")
+top = aggregate_skills(rows, top_n=top_n)
 top_df = pd.DataFrame(top, columns=["Skill", "Mentions"])
 
 left, right = st.columns([1, 1])
@@ -153,4 +91,3 @@ if st.toggle("Show word cloud"):
 st.divider()
 st.subheader("Matched titles preview")
 st.write(sorted(filtered["Title"].unique())[:20])
-
